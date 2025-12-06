@@ -1,0 +1,103 @@
+# Update the existing prototype to add a "Session Terminated" screen when HP reaches zero.
+# We'll modify game.js to:
+# - Pause gameplay on death
+# - Show an overlay with reason: "Health reached zero"
+# - Button to continue (respawn with permanent upgrades)
+#
+# Then re-zip the project as a new zip.
+
+from pathlib import Path
+import zipfile
+
+BASE_DIR = Path("/mnt/data/nodebuster_game")
+GAME_JS = BASE_DIR / "game.js"
+
+game_js = GAME_JS.read_text(encoding="utf-8")
+
+# Add overlay HTML via JS injection and death handling.
+# We'll append helper functions and minimally patch the death block.
+
+overlay_code = r'''
+// ===== Session Terminated Overlay =====
+let sessionEnded = false;
+
+function showDeathScreen(reason){
+  sessionEnded = true;
+  const overlay = document.createElement('div');
+  overlay.id = 'death_overlay';
+  overlay.style.position = 'fixed';
+  overlay.style.left = '0';
+  overlay.style.top = '0';
+  overlay.style.width = '100%';
+  overlay.style.height = '100%';
+  overlay.style.background = 'rgba(5,8,20,0.92)';
+  overlay.style.display = 'flex';
+  overlay.style.alignItems = 'center';
+  overlay.style.justifyContent = 'center';
+  overlay.style.zIndex = '9999';
+
+  overlay.innerHTML = `
+    <div style="background:#0f1724;padding:20px;border-radius:10px;width:320px;text-align:center;border:2px solid #a24dff">
+      <h2 style="margin-top:0;color:#ff6b6b">SESSION TERMINATED</h2>
+      <p style="margin:8px 0;color:#eaf2ff">Reason:</p>
+      <p style="margin:6px 0 12px 0;color:#ffcaca">${reason}</p>
+      <button id="continue_btn" style="padding:8px 12px;border-radius:6px;background:#1f6feb;color:white;border:none;cursor:pointer">
+        Continue
+      </button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('continue_btn').onclick = () => {
+    overlay.remove();
+    respawnAfterDeath();
+  };
+}
+
+function respawnAfterDeath(){
+  sessionEnded = false;
+  // keep permanent upgrades, apply death penalty
+  bits = Math.max(0, Math.floor(bits * 0.5));
+  hp = rules.startHP + (save.upgrades.max_hp || 0);
+  backlashTimers = [];
+  backlashStacks = 0;
+  log('Respawned. Permanent upgrades retained. Bits halved.');
+  save.hp = hp;
+  save.bits = bits;
+  saveGame();
+}
+'''
+
+# Patch: replace the death logic block
+old_death = """  if(hp <= 0){
+    hp = 0;
+    log('You died! (Prototype)');
+    // on death, keep permanent upgrades but reset hp and bits small penalty
+    save.upgrades = save.upgrades || {};
+    save.bits = Math.max(0, Math.floor(bits*0.5));
+    bits = save.bits;
+    hp = HP_START + (save.upgrades.max_hp || 0);
+    log('Respawned with permanent upgrades retained. Bits halved.');
+    saveGame();
+  }"""
+
+new_death = """  if(hp <= 0 && !sessionEnded){
+    hp = 0;
+    log('Session terminated.');
+    showDeathScreen('Health reached zero');
+  }"""
+
+if old_death in game_js:
+    game_js = game_js.replace(old_death, new_death)
+    # Append overlay code near the end
+    game_js += "\n\n" + overlay_code
+
+GAME_JS.write_text(game_js, encoding="utf-8")
+
+# Re-zip updated project
+zip_path = Path("/mnt/data/nodebuster_prototype_with_death_screen.zip")
+with zipfile.ZipFile(zip_path, 'w') as z:
+    for p in BASE_DIR.iterdir():
+        if p.is_file():
+            z.write(p, arcname=p.name)
+
+zip_path
